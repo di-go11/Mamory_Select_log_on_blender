@@ -1,0 +1,2 @@
+# Mamory_Select_log_on_blender
+選択したポリゴンをログ化してその選択に戻りたくなった時に戻ることが出来るaddon
