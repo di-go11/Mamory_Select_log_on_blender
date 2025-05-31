@@ -1,15 +1,17 @@
-from bpy.types import Operator
+#from bpy.types import Operator
 import bpy
 import time
 import bmesh
 import json
-import code.history_of_save_state.test__information as test__information
+from test_information import MockBPyTypesOperator as Operator
 
-#class HISTORY_OT_save_state(Operator):
-class HISTORY_OT_save_state(test__information.MockBPyTypesOperator):
+class HISTORY_OT_save_state(Operator):
     bl_idname = "history.save_state"
     bl_label = "Save Current State"
     bl_description = "Save current state of selected objects"
+    
+    def __init__(self):
+        self.report
 
     def execute(self, context):
         scene = context.scene
@@ -41,7 +43,7 @@ class HISTORY_OT_save_state(test__information.MockBPyTypesOperator):
 
     def serialize_mesh(self, obj):
         """メッシュオブジェクトをシリアライズ"""
-        bpy.context.view_layer.objects.active = obj
+        #bpy.context.view_layer.objects.active = obj
         bpy.ops.object.mode_set(mode="EDIT")
 
         bm = bmesh.from_mesh(obj.data)
