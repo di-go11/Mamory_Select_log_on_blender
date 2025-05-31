@@ -3,10 +3,10 @@ import bpy
 import time
 import bmesh
 import json
-import test_code
+import code.history_of_save_state.test__information as test__information
 
 #class HISTORY_OT_save_state(Operator):
-class HISTORY_OT_save_state(test_code.MockBPyTypesOperator):
+class HISTORY_OT_save_state(test__information.MockBPyTypesOperator):
     bl_idname = "history.save_state"
     bl_label = "Save Current State"
     bl_description = "Save current state of selected objects"
