@@ -1,1 +1,4 @@
 /code/venv/
+
+*.code-workspace
+*.gitignore
