@@ -2,7 +2,7 @@ bl_info = {
     "name": "Operation History Manager",
     "author": "Assistant",
     "version": (1, 0, 0),
-    "blender": (4, 0, 0),
+    "blender": (3, 0, 0),
     "location": "View3D > Sidebar > History",
     "description": "Record and restore multiple operation states",
     "category": "System",
@@ -58,6 +58,7 @@ class HISTORY_OT_save_state(Operator):
             self.report({"INFO"}, f"State saved: {entry.name}")
         else:
             self.report({"WARNING"}, "No mesh object selected")
+        print(f"name: {obj.name}")
 
         return {"FINISHED"}
 
@@ -84,6 +85,7 @@ class HISTORY_OT_save_state(Operator):
         bpy.ops.object.mode_set(mode="OBJECT")
 
         return {
+            "name": obj.name,
             "vertices": verts,
             "faces": faces,
             "edges": edges,
@@ -118,6 +120,7 @@ class HISTORY_OT_restore_state(Operator):
         try:
             mesh_data = json.loads(entry.data)
             self.restore_mesh(context.active_object, mesh_data)
+            self.restore_mesh(mesh_data)
             self.report({"INFO"}, f"Restored state: {entry.name}")
         except Exception as e:
             self.report({"ERROR"}, f"Failed to restore state: {str(e)}")
@@ -130,11 +133,8 @@ class HISTORY_OT_restore_state(Operator):
         bpy.context.view_layer.objects.active = obj
         bpy.ops.object.mode_set(mode="EDIT")
 
-        # 既存のメッシュをクリア
-        bpy.ops.mesh.select_all(action="SELECT")
-        bpy.ops.mesh.delete(type="VERT")
-
-        bm = bmesh.from_mesh(obj.data)
+        # Edit modeでbmeshを取得
+        bm = bmesh.from_edit_mesh(obj.data)
         bm.clear()
 
         # 頂点を復元
@@ -152,7 +152,6 @@ class HISTORY_OT_restore_state(Operator):
 
         # メッシュを更新
         bmesh.update_edit_mesh(obj.data)
-        bm.free()
 
         bpy.ops.object.mode_set(mode="OBJECT")
 
@@ -279,7 +278,7 @@ class VIEW3D_PT_history_manager(Panel):
         layout.separator()
 
         # 履歴リスト
-        layout.label(text="History List:", icon="HISTORY")
+        layout.label(text="History List:", icon="TIME")
         layout.template_list(
             "HISTORY_UL_list",
             "",
