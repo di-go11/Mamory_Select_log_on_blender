@@ -8,7 +8,6 @@ class InterfaceCreateLog(ABC):
     def Create(self):
         pass
 
-
 class CreateLog(InterfaceCreateLog):
 
     def __init__(self):
@@ -19,7 +18,7 @@ class CreateLog(InterfaceCreateLog):
     def Create(self):
         # 選択中の頂点取得
         selected_verts = [v for v in self.bm.verts if v.select]
-        
+
         """
         # わーるだ座標で出力
         for vertspoint in selected_verts:
