@@ -1,9 +1,0 @@
-{
-    "name": "Operation History Manager",
-    "author": "Assistant",
-    "version": "[1, 0, 0]",
-    "blender": "[4, 0, 0]",
-    "location": "View3D > Sidebar > History",
-    "description": "Record and restore multiple operation states",
-    "category": "System"
-}
