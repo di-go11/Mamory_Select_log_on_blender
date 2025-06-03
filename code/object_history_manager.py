@@ -1,10 +1,10 @@
 bl_info = {
     "name": "Operation History Manager",
     "author": "Assistant",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > History",
-    "description": "Record and restore multiple operation states with UUID support",
+    "description": "Record and restore multiple operation states with UUID and modifier support",
     "category": "System",
 }
 
@@ -42,7 +42,7 @@ class HistoryEntry(PropertyGroup):
 class HISTORY_OT_save_state(Operator):
     bl_idname = "history.save_state"
     bl_label = "Save Current State"
-    bl_description = "Save current state of selected objects"
+    bl_description = "Save current state of selected objects including modifiers"
 
     def execute(self, context):
         scene = context.scene
@@ -62,19 +62,28 @@ class HISTORY_OT_save_state(Operator):
             entry = history_props.history_list.add()
             entry.name = f"{obj.name}_State_{len([e for e in history_props.history_list if e.object_uuid == obj_uuid])}"
             entry.timestamp = time.strftime("%H:%M:%S")
-            entry.data = json.dumps(mesh_data)
+            entry.data = json.dumps(mesh_data, default=self.json_serializer)
             entry.object_uuid = obj_uuid
             entry.object_name = obj.name
 
             # オブジェクトごとの最大記録数をチェック
             self.cleanup_old_entries(history_props, obj_uuid)
 
-            self.report({"INFO"}, f"State saved: {entry.name}")
+            self.report(
+                {"INFO"},
+                f"State saved: {entry.name} (with {len(mesh_data.get('modifiers', []))} modifiers)",
+            )
             print(f"Saved state for object: {obj.name} (UUID: {obj_uuid})")
         else:
             self.report({"WARNING"}, "No mesh object selected")
 
         return {"FINISHED"}
+
+    def json_serializer(self, obj):
+        """JSONシリアライズ用のカスタムシリアライザー"""
+        if hasattr(obj, "__len__") and not isinstance(obj, str):
+            return list(obj)
+        return str(obj)
 
     def get_or_create_uuid(self, obj):
         """オブジェクトのUUIDを取得または新規作成"""
@@ -103,13 +112,40 @@ class HISTORY_OT_save_state(Operator):
                 adjusted_index = oldest_index - i
                 history_props.history_list.remove(adjusted_index)
 
+    def serialize_modifier_property(self, modifier, prop_name):
+        """モディファイアーのプロパティを安全にシリアライズ"""
+        try:
+            value = getattr(modifier, prop_name)
+
+            # 特殊なオブジェクト参照の処理
+            if hasattr(value, "name"):
+                # Blenderオブジェクトの場合は名前を保存
+                return {"type": "object_reference", "name": value.name}
+            elif hasattr(value, "__len__") and not isinstance(value, str):
+                # 配列・リストの場合
+                return {"type": "array", "value": list(value)}
+            elif isinstance(value, (int, float, str, bool)):
+                # 基本データ型
+                return {"type": "basic", "value": value}
+            else:
+                # その他の場合は文字列に変換
+                return {"type": "string", "value": str(value)}
+        except Exception as e:
+            print(f"Failed to serialize property {prop_name}: {e}")
+            return {"type": "error", "value": f"Error: {str(e)}"}
+
     def serialize_mesh(self, obj) -> dict:
-        """メッシュオブジェクトをシリアライズ"""
+        """メッシュオブジェクトをシリアライズ（モディファイアー完全対応）"""
         bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode="EDIT")
+
+        # 現在のモードを保存
+        original_mode = obj.mode
+
+        if original_mode != "EDIT":
+            bpy.ops.object.mode_set(mode="EDIT")
 
         # 正しいbmeshの作成方法
-        bm = bmesh.from_edit_mesh(obj.data)  # Edit modeの場合
+        bm = bmesh.from_edit_mesh(obj.data)
 
         # 頂点データ
         verts = [(v.co.x, v.co.y, v.co.z) for v in bm.verts]
@@ -123,7 +159,47 @@ class HISTORY_OT_save_state(Operator):
         edges = [(e.verts[0].index, e.verts[1].index) for e in bm.edges]
 
         bm.free()
-        bpy.ops.object.mode_set(mode="OBJECT")
+
+        # 元のモードに戻す
+        if original_mode != "EDIT":
+            bpy.ops.object.mode_set(mode=original_mode)
+
+        # 全モディファイアーの完全なデータを保存
+        modifiers = []
+
+        if obj.modifiers:
+            for modifier_num, modifier in enumerate(obj.modifiers):
+                modifier_data = {
+                    "name": modifier.name,
+                    "type": modifier.type,
+                    "show_viewport": modifier.show_viewport,
+                    "show_render": modifier.show_render,
+                    "show_in_editmode": modifier.show_in_editmode,
+                    "show_on_cage": modifier.show_on_cage,
+                    "properties": {},
+                }
+
+                # 全プロパティを取得
+                for prop in modifier.bl_rna.properties:
+                    prop_name = prop.identifier
+
+                    # システムプロパティをスキップ
+                    if prop_name in ["rna_type", "bl_rna", "name", "type"]:
+                        continue
+
+                    # 読み取り専用プロパティをスキップ
+                    if prop.is_readonly:
+                        continue
+
+                    # プロパティをシリアライズ
+                    modifier_data["properties"][prop_name] = (
+                        self.serialize_modifier_property(modifier, prop_name)
+                    )
+
+                modifiers.append(modifier_data)
+                print(
+                    f"Serialized modifier: {modifier.name} ({modifier.type}) with {len(modifier_data['properties'])} properties"
+                )
 
         # ディクショナリー型でメッシュデータを返す
         return {
@@ -133,13 +209,14 @@ class HISTORY_OT_save_state(Operator):
             "location": list(obj.location),
             "rotation": list(obj.rotation_euler),
             "scale": list(obj.scale),
+            "modifiers": modifiers,
         }
 
 
-class HISTORY_OT_restore_state(Operator) -> str:
+class HISTORY_OT_restore_state(Operator):
     bl_idname = "history.restore_state"
     bl_label = "Restore State"
-    bl_description = "Restore selected history state"
+    bl_description = "Restore selected history state including modifiers"
 
     def execute(self, context):
         scene = context.scene
@@ -168,9 +245,14 @@ class HISTORY_OT_restore_state(Operator) -> str:
         try:
             mesh_data = json.loads(entry.data)
             self.restore_mesh(target_obj, mesh_data)
-            self.report({"INFO"}, f"Restored state: {entry.name} to {target_obj.name}")
+            modifier_count = len(mesh_data.get("modifiers", []))
+            self.report(
+                {"INFO"},
+                f"Restored state: {entry.name} to {target_obj.name} (with {modifier_count} modifiers)",
+            )
         except Exception as e:
             self.report({"ERROR"}, f"Failed to restore state: {str(e)}")
+            print(f"Restore error details: {e}")
             return {"CANCELLED"}
 
         return {"FINISHED"}
@@ -182,10 +264,65 @@ class HISTORY_OT_restore_state(Operator) -> str:
                 return obj
         return None
 
+    def restore_modifier_property(self, modifier, prop_name, prop_data):
+        """モディファイアーのプロパティを安全に復元"""
+        try:
+            if prop_data["type"] == "object_reference":
+                # オブジェクト参照の復元
+                ref_obj = bpy.data.objects.get(prop_data["name"])
+                if ref_obj:
+                    setattr(modifier, prop_name, ref_obj)
+                else:
+                    print(
+                        f"Referenced object '{prop_data['name']}' not found for property {prop_name}"
+                    )
+            elif prop_data["type"] == "array":
+                # 配列データの復元
+                try:
+                    setattr(modifier, prop_name, prop_data["value"])
+                except:
+                    # 配列の要素を個別に設定する場合
+                    current_prop = getattr(modifier, prop_name)
+                    if hasattr(current_prop, "__setitem__"):
+                        for i, val in enumerate(prop_data["value"]):
+                            if i < len(current_prop):
+                                current_prop[i] = val
+            elif prop_data["type"] == "basic":
+                # 基本データ型の復元
+                setattr(modifier, prop_name, prop_data["value"])
+            elif prop_data["type"] == "string":
+                # 文字列データの復元（型変換を試行）
+                try:
+                    # 元の型を推測して変換
+                    current_value = getattr(modifier, prop_name)
+                    if isinstance(current_value, bool):
+                        setattr(
+                            modifier, prop_name, prop_data["value"].lower() == "true"
+                        )
+                    elif isinstance(current_value, int):
+                        setattr(modifier, prop_name, int(float(prop_data["value"])))
+                    elif isinstance(current_value, float):
+                        setattr(modifier, prop_name, float(prop_data["value"]))
+                    else:
+                        setattr(modifier, prop_name, prop_data["value"])
+                except:
+                    print(
+                        f"Failed to convert string property {prop_name}: {prop_data['value']}"
+                    )
+            else:
+                print(f"Unknown property type for {prop_name}: {prop_data['type']}")
+        except Exception as e:
+            print(f"Failed to restore property {prop_name}: {e}")
+
     def restore_mesh(self, obj, mesh_data):
-        """メッシュオブジェクトを復元"""
+        """メッシュオブジェクトを復元（モディファイアー完全対応）"""
+        # 現在のモードを保存
+        original_mode = obj.mode
+
         bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode="EDIT")
+
+        if original_mode != "EDIT":
+            bpy.ops.object.mode_set(mode="EDIT")
 
         # Edit modeでbmeshを取得
         bm = bmesh.from_edit_mesh(obj.data)
@@ -207,12 +344,50 @@ class HISTORY_OT_restore_state(Operator) -> str:
         # メッシュを更新
         bmesh.update_edit_mesh(obj.data)
 
-        bpy.ops.object.mode_set(mode="OBJECT")
+        if original_mode != "EDIT":
+            bpy.ops.object.mode_set(mode="OBJECT")
 
         # トランスフォームを復元
         obj.location = mesh_data["location"]
         obj.rotation_euler = mesh_data["rotation"]
         obj.scale = mesh_data["scale"]
+
+        # モディファイアーを復元
+        if "modifiers" in mesh_data and mesh_data["modifiers"]:
+            # 既存のモディファイアーを全て削除
+            obj.modifiers.clear()
+
+            # 保存されたモディファイアーを復元
+            for mod_data in mesh_data["modifiers"]:
+                try:
+                    # モディファイアーを作成
+                    new_modifier = obj.modifiers.new(
+                        name=mod_data["name"], type=mod_data["type"]
+                    )
+
+                    # 基本プロパティを設定
+                    new_modifier.show_viewport = mod_data.get("show_viewport", True)
+                    new_modifier.show_render = mod_data.get("show_render", True)
+                    new_modifier.show_in_editmode = mod_data.get(
+                        "show_in_editmode", False
+                    )
+                    new_modifier.show_on_cage = mod_data.get("show_on_cage", False)
+
+                    # 全プロパティを復元
+                    properties = mod_data.get("properties", {})
+                    for prop_name, prop_data in properties.items():
+                        self.restore_modifier_property(
+                            new_modifier, prop_name, prop_data
+                        )
+
+                    print(
+                        f"Restored modifier: {new_modifier.name} ({new_modifier.type}) with {len(properties)} properties"
+                    )
+
+                except Exception as e:
+                    print(
+                        f"Failed to restore modifier {mod_data.get('name', 'Unknown')}: {e}"
+                    )
 
 
 class HISTORY_OT_delete_entry(Operator):
@@ -291,24 +466,6 @@ class HISTORY_OT_clear_object_history(Operator):
         )
 
         return {"FINISHED"}
-
-
-"""
-class HISTORY_OT_auto_record_toggle(Operator):
-    bl_idname = "history.auto_record_toggle"
-    bl_label = "Toggle Auto Record"
-    bl_description = "Toggle automatic recording of operations"
-
-    def execute(self, context):
-        scene = context.scene
-        history_props = scene.history_manager
-        history_props.auto_record = not history_props.auto_record
-
-        status = "enabled" if history_props.auto_record else "disabled"
-        self.report({"INFO"}, f"Auto record {status}")
-
-        return {"FINISHED"}
-"""
 
 
 class HISTORY_UL_list(UIList):
@@ -394,13 +551,6 @@ class HistoryManagerProperties(PropertyGroup):
         min=1,
         max=50,
     )
-    """
-    auto_record: bpy.props.BoolProperty(
-        name="Auto Record",
-        description="Automatically record states during operations",
-        default=False,
-    )
-    """
     filter_current_object: bpy.props.BoolProperty(
         name="Filter Current Object",
         description="Show only history entries for the current active object",
@@ -427,26 +577,16 @@ class VIEW3D_PT_history_manager(Panel):
         box.prop(history_props, "max_history_count")
         box.prop(history_props, "filter_current_object")
 
-        """
-        # 自動記録ボタン
-        row = box.row()
-        if history_props.auto_record:
-            row.operator(
-                "history.auto_record_toggle", text="Stop Auto Record", icon="PAUSE"
-            )
-        else:
-            row.operator(
-                "history.auto_record_toggle", text="Start Auto Record", icon="REC"
-            )
-        """
-
         layout.separator()
 
         # アクティブオブジェクト情報
         if context.active_object:
             obj = context.active_object
             obj_uuid = obj.get("history_uuid", "Not assigned")
+            modifier_count = len(obj.modifiers) if obj.modifiers else 0
+
             layout.label(text=f"Active: {obj.name}")
+            layout.label(text=f"Modifiers: {modifier_count}")
             layout.label(
                 text=(
                     f"UUID: {obj_uuid[:8]}..."
@@ -509,18 +649,6 @@ def update_filter_display(context):
             area.tag_redraw()
 
 
-# 自動記録用のハンドラー
-def auto_record_handler(scene):
-    history_props = scene.history_manager
-    if (
-        history_props.auto_record
-        and bpy.context.active_object
-        and bpy.context.active_object.type == "MESH"
-    ):
-        # 一定間隔で自動保存（この例では簡略化）
-        pass
-
-
 # アクティブオブジェクト変更時のハンドラー
 def active_object_handler(scene, depsgraph):
     """アクティブオブジェクト変更時にUIを更新"""
@@ -540,7 +668,6 @@ classes = [
     HISTORY_OT_delete_entry,
     HISTORY_OT_clear_all,
     HISTORY_OT_clear_object_history,
-    # HISTORY_OT_auto_record_toggle,
     HISTORY_UL_list,
     VIEW3D_PT_history_manager,
 ]
