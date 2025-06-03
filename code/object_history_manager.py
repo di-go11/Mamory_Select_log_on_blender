@@ -1,8 +1,8 @@
 bl_info = {
     "name": "Operation History Manager",
     "author": "Assistant",
-    "version": (1, 1, 0),
-    "blender": (4, 3, 2),
+    "version": (0, 1, 0),
+    "blender": (4, 0, 0),
     "location": "View3D > Sidebar > History",
     "description": "Record and restore multiple operation states with UUID support",
     "category": "System",
@@ -103,7 +103,7 @@ class HISTORY_OT_save_state(Operator):
                 adjusted_index = oldest_index - i
                 history_props.history_list.remove(adjusted_index)
 
-    def serialize_mesh(self, obj):
+    def serialize_mesh(self, obj) -> dict:
         """メッシュオブジェクトをシリアライズ"""
         bpy.context.view_layer.objects.active = obj
         bpy.ops.object.mode_set(mode="EDIT")
@@ -125,6 +125,7 @@ class HISTORY_OT_save_state(Operator):
         bm.free()
         bpy.ops.object.mode_set(mode="OBJECT")
 
+        # ディクショナリー型でメッシュデータを返す
         return {
             "vertices": verts,
             "faces": faces,
@@ -135,7 +136,7 @@ class HISTORY_OT_save_state(Operator):
         }
 
 
-class HISTORY_OT_restore_state(Operator):
+class HISTORY_OT_restore_state(Operator) -> str:
     bl_idname = "history.restore_state"
     bl_label = "Restore State"
     bl_description = "Restore selected history state"
