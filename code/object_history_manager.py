@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Operation History Manager",
     "author": "Assistant",
-    "version": (0, 2, 0),
+    "version": (1, 0, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > History",
     "description": "Record and restore multiple operation states with UUID and modifier support",
